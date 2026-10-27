@@ -1,0 +1,34 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "esp-input-bridge",
+  "version": "0.2.0",
+  "description": "Use ESP32 hardware mouse and keyboard input from an existing agent, with no second model call.",
+  "author": {"name": "jensengao194-spec", "url": "https://github.com/jensengao194-spec"},
+  "homepage": "https://github.com/jensengao194-spec/esp-input-bridge",
+  "repository": "https://github.com/jensengao194-spec/esp-input-bridge",
+  "license": "MIT",
+  "keywords": ["esp32", "hid", "hardware", "mcp", "automation"],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "onboardingSkill": "./skills/hardware-input/SKILL.md",
+      "interface": {
+        "displayName": "ESP Input Bridge",
+        "shortDescription": "ESP32 hardware mouse/keyboard",
+        "longDescription": "Replace software mouse and keyboard injection with ESP32-C3 BLE HID or ESP32-S3 BLE/USB HID. Your existing agent keeps its reasoning role. Three local MCP tools observe, execute a bounded batch, and stop. Demo mode works without a device. Real operation requires a provisioned board, local configuration, and screen capture permission. Physical-board validation is pending; hardware input does not guarantee avoiding automation detection.",
+        "developerName": "jensengao194-spec",
+        "category": "Developer Tools",
+        "capabilities": ["Read target screen", "Execute hardware input", "Stop inputs"],
+        "websiteURL": "https://github.com/jensengao194-spec/esp-input-bridge",
+        "supportURL": "https://github.com/jensengao194-spec/esp-input-bridge/issues",
+        "privacyPolicyURL": "https://github.com/jensengao194-spec/esp-input-bridge/blob/main/docs/PRIVACY.md",
+        "termsOfServiceURL": "https://github.com/jensengao194-spec/esp-input-bridge/blob/main/docs/TERMS.md",
+        "composerIcon": "./assets/icon.svg",
+        "logo": "./assets/icon.svg",
+        "brandColor": "#176A55",
+        "brandColorDark": "#72EBBF",
+        "defaultPrompt": ["Run the hardware input demo without connecting a board.", "Help configure my ESP32 hardware input adapter."]
+      }
+    }
+  }
+}

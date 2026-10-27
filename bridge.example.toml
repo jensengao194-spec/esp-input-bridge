@@ -1,0 +1,24 @@
+# The MCP plugin uses this config and never calls a model itself.
+# Copy to ~/.config/esp-input-bridge/config.toml, or set ESP_INPUT_CONFIG.
+[bridge]
+# demo: simulated target; preview: real screenshot, no device; hardware: real HID.
+mode = "demo"
+output_dir = "runs"
+max_age = 120
+settle_ms = 150
+
+[observation]
+monitor = 1
+max_width = 1280
+# region = {left = 0, top = 0, width = 1000, height = 700}
+# context_file = "context.txt"
+
+[transport]
+kind = "serial" # serial or ble; command channel is independent of HID output
+port = "/dev/cu.usbmodem_REPLACE"
+# address = "CoreBluetooth-UUID-or-BLE-address"
+baudrate = 115200
+timeout = 3
+# auto: S3 prefers ready USB; C3 uses BLE. No fallback mid-batch.
+output = "auto" # auto, ble, usb
+token_env = "ESP_HID_TOKEN"

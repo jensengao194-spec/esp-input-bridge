@@ -1,0 +1,2 @@
+# Keep PlatformIO's web-console dependencies separate from the MCP runtime.
+platformio==6.1.18

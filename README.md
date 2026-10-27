@@ -98,10 +98,13 @@ BLE 控制通道用 `address` 替代 `port`，可用 `.venv/bin/esp-use scan` �
 ```bash
 export ESP_HID_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 .venv/bin/esp-use provision --port /dev/cu.usbmodem_REPLACE
+.venv/bin/esp-use pair --port /dev/cu.usbmodem_REPLACE
 .venv/bin/esp-use device --port /dev/cu.usbmodem_REPLACE
 ```
 
 保存 token，并在 MCP 服务进程环境中提供相同 `ESP_HID_TOKEN`。凭证保存在板上 NVS。修改已有凭证还需设置 `ESP_HID_CURRENT_TOKEN`；不能通过 BLE 配置或重置。凭证不能放进公开仓库或插件包。
+
+`pair` 通过 USB 验证 token 后打开 120 秒窗口，并显示一次性六位配对码；在目标电脑的蓝牙配对界面输入该码。每次窗口只接受一次新连接尝试，成功、失败、断线或超时均关闭。需要另一个 BLE 控制端时，重新从 USB 打开窗口。正常重连使用已绑定密钥，不重复输入配对码。默认不接受新设备，也不自动覆盖旧绑定；丢失绑定时通过 USB 执行 `esp-use forget-bonds --port ...`，再重新配对。详见[安全说明](docs/SECURITY.md)。
 
 观察进程必须运行在接收键鼠输入的电脑上。macOS 需给启动程序屏幕录制权限，BLE 另需蓝牙权限；Linux 目前要求 X11。`.venv/bin/esp-use doctor` 只检查环境，不连接硬件。
 

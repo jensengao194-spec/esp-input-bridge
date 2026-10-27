@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP Input Bridge · 控制台</title>
+<style>
+:root{color-scheme:dark;--bg:#0b111a;--panel:#111d2b;--line:#25384b;--ink:#e1edf8;--muted:#91a7bc;--green:#72ebbf}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 system-ui,-apple-system,sans-serif}
+main{max-width:1440px;margin:auto;padding:32px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:32px}
+.eyebrow{font:11px/1.8 ui-monospace,monospace;letter-spacing:.18em;color:var(--green)}h1{font-size:26px;font-weight:550;letter-spacing:-.04em;margin:4px 0}h2{font-size:15px;font-weight:550;margin:0 0 16px}.pill{border:1px solid var(--line);border-radius:30px;padding:7px 14px;color:var(--muted);font-size:12px}
+.grid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:24px}.panel{padding:24px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}label{display:block;margin:20px 0 8px;color:var(--muted);font-size:12px}
+textarea,select{width:100%;border:1px solid #334b60;border-radius:9px;background:#0a1521;color:var(--ink);padding:12px;font:inherit}textarea{height:135px;resize:vertical}button{border:0;border-radius:9px;background:var(--green);color:#08281e;padding:12px 18px;font:600 13px system-ui;cursor:pointer}button:disabled{opacity:.4;cursor:default}.buttons{display:flex;gap:10px;margin-top:20px}.stop{background:#38232d;color:#ffabb9;border:1px solid #69404e}
+.note{font-size:12px;color:var(--muted);margin-top:18px}.pipeline{border-top:1px solid var(--line);margin-top:28px;padding-top:20px;color:var(--muted);font:12px/2 ui-monospace,monospace}.pipeline span{color:var(--green)}.preview-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.preview-head h2{margin:0}.screen{width:100%;aspect-ratio:1.6;background:#09111b;border:1px solid var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden}.screen img{width:100%;height:100%;object-fit:contain;display:none}.empty{text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);font-weight:500;font-size:18px;margin-bottom:10px}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}.metric{padding:14px;border-radius:10px;background:#0a1622}.metric small{color:var(--muted);display:block;font-size:11px}.metric strong{font-size:16px;font-weight:500}.events{max-height:230px;overflow:auto;font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:#a9bfd3}#error{color:#ffabb9;white-space:pre-wrap;overflow-wrap:anywhere}footer{color:#6d859c;font-size:11px;margin-top:24px}@media(max-width:850px){main{padding:18px}.grid{grid-template-columns:1fr}header{gap:12px}.panel{padding:18px}}
+</style>
+<main>
+<header><div><div class="eyebrow">OBSERVE / REASON / INTERACT</div><h1>ESP Input Bridge</h1></div><div class="pill" id="mode">本地控制台</div></header>
+<div class="grid"><aside class="panel"><h2>任务控制</h2>
+<label for="source">运行环境</label><select id="source"><option value="demo">无硬件演示</option value="live">已配置的桌面 Agent</option></select>
+<label for="goal">任务目标</label><textarea id="goal">在表单中输入 Hello ESP32-C3!，然后提交。</textarea>
+<div class="buttons"><button id="start">开始任务</button><button id="stop" class="stop" disabled>停止</button></div>
+<div id="error" role="alert"></div><p class="note" id="hint">演示使用确定性规划器和模拟目标，不连接模型或开发板。</p>
+<div class="pipeline">01 <span>获取画面</span><br>02 Agent 规划与动作校验<br>03 USB 串口 / BLE 指令<br>04 <span>C3 BLE / S3 BLE + USB HID</span><br>05 观察结果并继续</div>
+<p class="note">C3 提供蓝牙键鼠；S3 提供蓝牙和原生 USB 键鼠。命令通道与输出通道独立。</p></aside>
+<section class="panel"><div class="preview-head"><h2>目标画面</h2><span class="pill" id="status">等待任务</span></div>
+<div class="screen"><img id="image" alt="最近一次目标观察"><div class="empty" id="empty"><b>让操作形成闭环</b>开始无硬件演示，查看观察、规划和输入记录。</div></div>
+<div class="metrics"><div class="metric"><small>观察轮次</small><strong id="steps">—</strong></div><div class="metric"><small>执行通道</small><strong id="channel">模拟器</strong></div><div class="metric"><small>最近事件</small><strong id="last">—</strong></div></div>
+<h2>执行记录</h2><div class="events" id="events">尚无记录</div><p class="note" id="reason"></p></section></div>
+<footer>仅用于获授权的软件自动化 · ACK 表示固件已处理，软件结果由下一轮观察判断 · 硬件输入不保证规避检测</footer>
+</main>
+<script>
+const token='__SESSION_TOKEN__'; const $=id=>document.getElementById(id);
+let imageId=null,imageURL=null,hardware=false;
+const labels={ready:'就绪',running:'执行中',verified_demo:'演示已验证',agent_done:'Agent 报告完成',dry_run:'预览完成',blocked:'需要处理',error:'执行出错',stopped:'已停止',step_limit:'达到轮次上限'};
+async function api(path,body){const r=await fetch('/api/'+path,{method:body?'POST':'GET',headers:{'X-Session-Token':token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});if(!r.ok)throw new Error(await r.text());return r}
+function hint(){ $('goal').disabled=$('source').value==='demo'; $('hint').textContent=$('source').value==='demo'?'演示任务固定，使用确定性规划器和模拟目标，不连接模型或开发板。':hardware?'真实执行已启用，操作将经开发板发送到配对的目标电脑。':'桌面模式仅生成一次操作预览；真实执行需启动时设置 --execute。'; }
+$('source').onchange=hint;
+$('start').onclick=async()=>{try{$('error').textContent='';await api('start',{goal:$('goal').value,demo:$('source').value==='demo'});imageId=null;await update()}catch(e){$('error').textContent=e.message}};
+$('stop').onclick=async()=>{try{await api('stop',{});$('reason').textContent='停止请求已发送，等待当前通信结束并释放按键。'}catch(e){$('error').textContent=e.message}};
+async function update(){try{const data=await(await api('status')).json();hardware=data.hardware_enabled;$('mode').textContent=hardware?'硬件执行已启用':'硬件执行关闭';hint();const r=data.run;if(!r)return;const busy=r.status==='running'||r.status==='ready';$('start').disabled=busy;$('stop').disabled=!busy;$('source').disabled=busy;$('status').textContent=labels[r.status]||r.status;$('steps').textContent=r.steps;$('channel').textContent=$('source').value==='demo'?'模拟器':r.execute?'开发板 HID':'仅预览';$('reason').textContent=r.reason||r.run_dir;$('error').textContent=r.error||'';$('last').textContent=data.events.at(-1)?.kind||'—';$('events').textContent=data.events.filter(e=>['plan','send','dry_run','finish','error','cleanup_error'].includes(e.kind)).slice(-12).map(e=>new Date(e.time*1000).toLocaleTimeString()+'  '+e.kind+'  '+JSON.stringify(e.data)).join('\n');if(data.observation_id&&data.observation_id!==imageId){const b=await(await api('image')).blob();const url=URL.createObjectURL(b);$('image').src=url;$('image').style.display='block';$('empty').style.display='none';if(imageURL)URL.revokeObjectURL(imageURL);imageURL=url;imageId=data.observation_id}}catch(e){$('error').textContent=e.message}}
+async function tick(){await update();setTimeout(tick,600)}tick();
+</script>
+</html>

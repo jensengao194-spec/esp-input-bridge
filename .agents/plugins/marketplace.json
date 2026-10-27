@@ -1,0 +1,12 @@
+{
+  "name": "esp-input-bridge",
+  "interface": {"displayName": "ESP Input Bridge"},
+  "plugins": [
+    {
+      "name": "esp-input-bridge",
+      "source": {"source": "local", "path": "./plugins/esp-input-bridge"},
+      "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+      "category": "Developer Tools"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+# Copy to config.local.toml. Secrets stay in environment variables.
+[agent]
+# responses = OpenAI Responses; chat = OpenAI-compatible vision model; http = your agent service
+kind = "responses"
+base_url = "https://api.openai.com/v1"
+model = "" # Set an image-capable model available to your account.
+api_key_env = "OPENAI_API_KEY"
+strict = true # chat: set false only if the local server lacks JSON Schema support.
+timeout = 90
+
+[observation]
+kind = "desktop"
+monitor = 1
+max_width = 1280
+# Coordinates below are OS desktop logical units. Region must be on this monitor.
+# region = {left = 0, top = 0, width = 1000, height = 700}
+# Optional accessibility/OCR/context text produced by your own authorized reader.
+# context_file = "context.txt"
+
+[transport]
+kind = "serial" # serial or ble (both output BLE HID on ESP32-C3)
+port = "/dev/cu.usbmodem_REPLACE"
+baudrate = 115200
+# address = "macOS-CoreBluetooth-UUID-or-device-address" # for ble
+token_env = "ESP_HID_TOKEN"
+timeout = 3
+
+[runner]
+max_steps = 20
+max_age = 120
+settle_ms = 250
