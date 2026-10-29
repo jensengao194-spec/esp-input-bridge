@@ -11,9 +11,9 @@ from mcp.client.stdio import stdio_client
 ROOT = Path(__file__).resolve().parents[1]
 
 
-async def verify(runtime):
+async def verify(runtime, plugin=ROOT/"plugins/esp-input-bridge"):
     params = StdioServerParameters(command=sys.executable,
-        args=[str(ROOT/"plugins/esp-input-bridge/server/launch.py"), "--demo"],
+        args=[str(plugin/"server/launch.py"), "--demo"],
         env={"ESP_INPUT_RUNTIME": str(runtime.resolve())})
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -43,8 +43,9 @@ async def verify(runtime):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--runtime", type=Path, required=True)
+    p.add_argument("--plugin", type=Path, default=ROOT/"plugins/esp-input-bridge")
     args = p.parse_args()
-    print(json.dumps(asyncio.run(verify(args.runtime)), indent=2))
+    print(json.dumps(asyncio.run(verify(args.runtime, args.plugin.resolve())), indent=2))
 
 
 if __name__ == "__main__":

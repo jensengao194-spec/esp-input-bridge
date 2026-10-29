@@ -36,6 +36,18 @@ def parser():
     mcp = commands.add_parser("mcp", help="start the lightweight stdio MCP input adapter")
     mcp.add_argument("--config")
     mcp.add_argument("--demo", action="store_true")
+    for name in ("ota", "ota-status", "ota-confirm", "ota-rollback"):
+        ota = commands.add_parser(name, help="A/B firmware update and boot management")
+        if name == "ota":
+            ota.add_argument("--address", required=True, help="bonded BLE device address/UUID")
+            ota.set_defaults(port=None)
+        else:
+            channel = ota.add_mutually_exclusive_group(required=True)
+            channel.add_argument("--address", help="bonded BLE device address/UUID")
+            channel.add_argument("--port", help="USB serial status/boot management")
+        ota.add_argument("--token-env", default="ESP_HID_TOKEN")
+        if name == "ota":
+            ota.add_argument("--image", required=True)
     for name in ("device", "provision", "pair", "forget-bonds"):
         device = commands.add_parser(name, help={"device": "probe a device", "provision": "provision a token over USB serial",
                                                 "pair": "open a 120-second one-time BLE pairing window via USB",
@@ -50,6 +62,35 @@ def parser():
 
 def main():
     args = parser().parse_args()
+    if args.command in ("ota", "ota-status", "ota-confirm", "ota-rollback"):
+        from .ota import upload, verify_boot
+        from .transports import BLETransport, SerialTransport
+        token = os.environ.get(args.token_env, "")
+        if args.command != "ota-status" and (not 32 <= len(token) <= 96 or any(not 33 <= ord(c) <= 126 for c in token)):
+            raise ValueError("token environment variable must contain 32..96 printable non-space ASCII characters")
+        factory = (lambda: BLETransport(args.address, timeout=15)) if args.address else (lambda: SerialTransport(args.port, timeout=15))
+        async def ota_command():
+            transport = factory()
+            last_percent = -1
+            def progress(sent, total):
+                nonlocal last_percent
+                percent = sent * 100 // total
+                if percent // 5 != last_percent // 5:
+                    print(f"OTA {percent}% ({sent}/{total})", file=sys.stderr, flush=True)
+                last_percent = percent
+            try:
+                if args.command == "ota":
+                    result = await upload(transport, args.image, token, progress)
+                else:
+                    op = {"ota-status": "ota_status", "ota-confirm": "ota_confirm", "ota-rollback": "ota_rollback"}[args.command]
+                    result = await transport.request({"op": op, "token": token})
+            finally:
+                await transport.close()
+            if args.command in ("ota", "ota-rollback"):
+                result["boot"] = await verify_boot(factory, result, token)
+            return result
+        print(json.dumps(asyncio.run(ota_command()), indent=2))
+        return
     if args.command == "mcp":
         from .mcp_server import main as mcp_main
         argv = (["--config", args.config] if args.config else []) + (["--demo"] if args.demo else [])

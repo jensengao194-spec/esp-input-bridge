@@ -51,14 +51,21 @@ class Runner:
                 observation = await self.capture(step)
                 # Stop remains responsive while a remote model is generating.
                 planning = asyncio.create_task(self.planner.plan(goal, observation, history))
+                stopping = asyncio.create_task(self.stop.wait())
                 try:
                     while not planning.done():
-                        await self.executor.pause(0.05)
+                        self.executor.check_stop()
+                        # Wake immediately on completion/stop; only STOP-file polling
+                        # needs a timeout. Do not round every fast result up to 50ms.
+                        await asyncio.wait({planning, stopping}, timeout=0.05,
+                                           return_when=asyncio.FIRST_COMPLETED)
+                    self.executor.check_stop()
                     plan = await planning
                 finally:
-                    if not planning.done():
-                        planning.cancel()
-                        await asyncio.gather(planning, return_exceptions=True)
+                    for task in (planning, stopping):
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(planning, stopping, return_exceptions=True)
                 self.executor.check_stop()
                 self.executor.prepare(plan, observation)
                 self.audit("plan", plan.model_dump())

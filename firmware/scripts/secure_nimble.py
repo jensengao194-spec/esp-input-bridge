@@ -1,4 +1,4 @@
-"""Reject silent replacement of an existing bond in pinned NimBLE-Arduino 2.3.6.
+"""Reject silent replacement of an existing bond in pinned NimBLE-Arduino 2.3.9.
 
 Upstream's default handler deletes the old key and retries. Re-pairing this bridge
 requires explicit USB `forget-bonds` instead. Middleware runs before compilation,

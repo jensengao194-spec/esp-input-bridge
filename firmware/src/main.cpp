@@ -6,7 +6,13 @@
 #include <Preferences.h>
 #include "report_map.h"
 #include "pairing_policy.h"
+#include "bridge_version.h"
 #include <esp_random.h>
+#include <services/gatt/ble_svc_gatt.h>
+
+// Arduino otherwise confirms OTA before setup(), defeating authenticated health
+// confirmation and the pending-image deadline. Override its weak C hook.
+extern "C" bool verifyRollbackLater() { return true; }
 
 #if CONFIG_IDF_TARGET_ESP32S3
 #if ARDUINO_USB_MODE != 0
@@ -51,6 +57,7 @@ static const char* outputName() {
 static constexpr char SERVICE[] = "c3a00001-7e45-4f9b-9d83-9bb45a2c1000";
 static constexpr char COMMAND[] = "c3a00002-7e45-4f9b-9d83-9bb45a2c1000";
 static constexpr char REPLY[]   = "c3a00003-7e45-4f9b-9d83-9bb45a2c1000";
+static constexpr char OTA_DATA[] = "c3a00004-7e45-4f9b-9d83-9bb45a2c1000";
 static constexpr uint16_t NONE = BLE_HS_CONN_HANDLE_NONE;
 static constexpr size_t MAX_LINE = 511;
 static constexpr uint32_t LEASE_MS = 30000;
@@ -79,6 +86,8 @@ static bool tokenMatches(const char* supplied) {
                     (i<expected ? static_cast<uint8_t>(controlToken[i]) : 0);
     return expected>=32 && expected<=96 && n<=96 && difference==0;
 }
+
+#include "ota_bridge.h"
 
 struct Message { char line[MAX_LINE+1]; uint16_t peer; uint32_t generation; };
 static QueueHandle_t queue;
@@ -131,18 +140,33 @@ static bool activeReady() {
     return activeOutput==Output::USB ? usbReady() : activeOutput==Output::BLE && bleReady();
 }
 
+static uint32_t nextBleReportAt=0;
+static void paceBLEReport() {
+    // One input notification per negotiated connection interval. USB control can
+    // otherwise outrun the BLE controller's finite TX buffers and lose a release.
+    auto info=NimBLEDevice::getServer()->getPeerInfoByHandle(keyboardPeer.load());
+    uint32_t interval=std::max(uint32_t(8),(uint32_t(info.getConnInterval())*1250+999)/1000);
+    int32_t remaining=static_cast<int32_t>(nextBleReportAt-millis());
+    if (remaining>0 && remaining<1000) delay(remaining);
+    nextBleReportAt=millis()+interval;
+}
+
 static bool sendKeyboard(const uint8_t* report, size_t len) {
 #if CONFIG_IDF_TARGET_ESP32S3
     if (activeOutput==Output::USB) return usbReady() && usbHid.SendReport(1,report,len);
 #endif
-    return activeOutput==Output::BLE && bleReady() && keyboardReport->notify(report,len,keyboardPeer.load());
+    if (activeOutput!=Output::BLE || !bleReady()) return false;
+    paceBLEReport();
+    return keyboardReport->notify(report,len,keyboardPeer.load());
 }
 
 static bool sendMouse(const uint8_t* report, size_t len) {
 #if CONFIG_IDF_TARGET_ESP32S3
     if (activeOutput==Output::USB) return usbReady() && usbHid.SendReport(2,report,len);
 #endif
-    return activeOutput==Output::BLE && bleReady() && mouseReport->notify(report,len,mousePeer.load());
+    if (activeOutput!=Output::BLE || !bleReady()) return false;
+    paceBLEReport();
+    return mouseReport->notify(report,len,mousePeer.load());
 }
 
 static bool releaseAll() {
@@ -189,9 +213,18 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
     }
 } commandCallbacks;
 
+class OTADataCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override {
+        if (!trusted(info)) return;
+        auto data=c->getValue();
+        ota.enqueue(data.data(),data.size(),info.getConnHandle(),generationOf(info.getConnHandle()));
+    }
+} otaDataCallbacks;
+
 class ServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* server, NimBLEConnInfo& info) override {
         uint16_t peer=info.getConnHandle();
+        Serial.printf("BLE connect peer=%u bonded=%u window=%u\n",peer,NimBLEDevice::isBonded(info.getIdAddress()),pairing.active(millis()));
         if (!NimBLEDevice::isBonded(info.getIdAddress()) && !pairing.claim(peer,millis())) {
             server->disconnect(peer);
             NimBLEDevice::startAdvertising();
@@ -204,10 +237,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
             p.peer=peer;
             break;
         }
-        NimBLEDevice::startSecurity(peer);
+        // On macOS, let an authenticated GATT access initiate first pairing.
+        // A peripheral-initiated SMP exchange before service discovery can wait
+        // indefinitely without the OS presenting its passkey dialog.
+        if (NimBLEDevice::isBonded(info.getIdAddress())) NimBLEDevice::startSecurity(peer);
         NimBLEDevice::startAdvertising(); // Allow a separate BLE controller and HID target.
     }
-    void onDisconnect(NimBLEServer*, NimBLEConnInfo& info, int) override {
+    void onDisconnect(NimBLEServer*, NimBLEConnInfo& info, int reason) override {
+        Serial.printf("BLE disconnect peer=%u reason=%d\n",info.getConnHandle(),reason);
         bool affected=keyboardPeer.load()==info.getConnHandle() || mousePeer.load()==info.getConnHandle() ||
                       owner.load()==info.getConnHandle();
         if (keyboardPeer.load()==info.getConnHandle()) keyboardPeer=NONE;
@@ -219,10 +256,17 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         NimBLEDevice::startAdvertising();
     }
     void onAuthenticationComplete(NimBLEConnInfo& info) override {
+        Serial.printf("BLE auth peer=%u encrypted=%u authenticated=%u bonded=%u key=%u\n",info.getConnHandle(),info.isEncrypted(),info.isAuthenticated(),info.isBonded(),info.getSecKeySize());
         if (!trusted(info)) NimBLEDevice::getServer()->disconnect(info.getConnHandle());
+        else {
+            auto* server=NimBLEDevice::getServer();
+            server->updateConnParams(info.getConnHandle(),12,12,0,400); // 15ms / no peripheral latency.
+            server->setDataLen(info.getConnHandle(),251);
+            ble_svc_gatt_changed(0x0001,0xffff); // Refresh bonded OS GATT caches after firmware changes.
+        }
         if (pairing.owns(info.getConnHandle())) pairing.close();
     }
-    uint32_t onPassKeyDisplay() override { return pairingCode.load(); }
+    uint32_t onPassKeyDisplay() override { Serial.println("BLE passkey requested (use USB setup response)"); return pairingCode.load(); }
     void onConfirmPassKey(NimBLEConnInfo& info, uint32_t) override {
         NimBLEDevice::injectConfirmPasskey(info,false); // No silent numeric confirmation.
     }
@@ -241,10 +285,11 @@ static uint32_t fingerprint(const char* s) {
 static void emit(const String& text, uint16_t peer) {
     if (peer==NONE) { Serial.println(text); return; }
     String framed=text+"\n";
-    for (size_t i=0;i<framed.length();i+=20) {
-        size_t n=std::min(static_cast<size_t>(20), framed.length()-i);
+    size_t packet=std::max(size_t(20),std::min(size_t(244),size_t(NimBLEDevice::getServer()->getPeerMTU(peer)-3)));
+    for (size_t i=0;i<framed.length();i+=packet) {
+        size_t n=std::min(packet, framed.length()-i);
         if (!replyReport->notify(reinterpret_cast<const uint8_t*>(framed.c_str()+i), n, peer)) break;
-        delay(10);
+        if (i+n<framed.length()) delay(1);
     }
 }
 
@@ -255,6 +300,20 @@ static bool integer(JsonVariantConst v, int lo, int hi) {
 static const char* perform(JsonDocument& d, uint16_t peer) {
     const char* op=d["op"] | "";
     if (!strcmp(op,"ping")) return nullptr;
+    if (!strncmp(op,"ota_",4)) {
+        if (strcmp(op,"ota_status") && armed) return "disarm_before_ota";
+        if (!strcmp(op,"ota_begin")) {
+            if (pairing.active(millis())) return "pairing_in_progress";
+            releaseAll();
+            if (peer!=NONE && tokenMatches(d["token"] | "")) {
+                auto* server=NimBLEDevice::getServer();
+                server->updateConnParams(peer,12,12,0,400); // 15ms, no slave latency.
+                server->setDataLen(peer,251);
+            }
+        }
+        return ota.perform(d,peer,peer==NONE ? 0 : generationOf(peer),tokenMatches(d["token"] | ""));
+    }
+    if (ota.busy() && strcmp(op,"release") && strcmp(op,"disarm")) return "ota_busy";
     if (!strcmp(op,"configure")) {
         if (peer!=NONE) return "usb_setup_only";
         if (armed) return "disarm_before_setup";
@@ -292,6 +351,7 @@ static const char* perform(JsonDocument& d, uint16_t peer) {
         return ok ? nullptr : "release_uncertain";
     }
     if (!strcmp(op,"arm")) {
+        if (ota.needsConfirmation()) return "confirm_firmware_first";
         const char* token=d["token"] | "";
         if (controlToken.length()<32) return "configure_token_first";
         if (static_cast<int32_t>(authBlockedUntil-millis())>0) return "auth_backoff";
@@ -307,6 +367,12 @@ static const char* perform(JsonDocument& d, uint16_t peer) {
         if (!strcmp(requested,"usb") || (!strcmp(requested,"auto") && usbReady())) chosen=Output::USB;
         else chosen=Output::BLE;
         if (!(chosen==Output::USB ? usbReady() : bleReady())) return "hid_not_ready";
+        if (chosen==Output::BLE) {
+            auto* server=NimBLEDevice::getServer();
+            auto info=server->getPeerInfoByHandle(keyboardPeer.load());
+            if (info.getConnInterval()!=12 || info.getConnLatency())
+                server->updateConnParams(keyboardPeer.load(),12,12,0,400);
+        }
         // Keep one output for the lease. Never switch targets after a disconnect.
         if (armed && activeOutput!=chosen) {
             if (!releaseAll()) { armed=false; return "release_uncertain"; }
@@ -331,10 +397,10 @@ static const char* perform(JsonDocument& d, uint16_t peer) {
             report[i++]=key.as<int>();
         }
         bool ok=sendKeyboard(report,sizeof(report));
-        delay(35); // Bounded pulse. No persistent key-down operation exists.
+        delay(activeOutput==Output::BLE ? 8 : 35); // Bounded pulse; BLE reports preserve packet order.
         uint8_t zero[8]={};
         bool released=sendKeyboard(zero,sizeof(zero));
-        delay(20);
+        if (activeOutput==Output::USB) delay(20);
         if (!ok || !released) { armed=false; return "hid_delivery_uncertain"; }
         return nullptr;
     }
@@ -352,11 +418,11 @@ static const char* perform(JsonDocument& d, uint16_t peer) {
             report[0]=d["button"].as<int>();
         }
         bool ok=sendMouse(reinterpret_cast<uint8_t*>(report),sizeof(report));
-        delay(35);
         if (report[0]) {
+            delay(activeOutput==Output::BLE ? 8 : 35);
             uint8_t zero[4]={};
             ok=sendMouse(zero,sizeof(zero)) && ok;
-            delay(20);
+            if (activeOutput==Output::USB) delay(20);
         }
         if (!ok) { armed=false; return "hid_delivery_uncertain"; }
         return nullptr;
@@ -390,7 +456,7 @@ static void handle(const Message& msg) {
     ack["v"]=1; ack["id"]=id; ack["ok"]=(error==nullptr); ack["hid_ready"]=hidReady();
     if (!strcmp(d["op"] | "","ping") || !strcmp(d["op"] | "","arm")) {
         ack["chip"]=CHIP_NAME;
-        ack["firmware"]="0.2.0";
+        ack["firmware"]=BRIDGE_FIRMWARE_VERSION;
         JsonArray outputs=ack["outputs"].to<JsonArray>();
         outputs.add("ble");
 #if CONFIG_IDF_TARGET_ESP32S3
@@ -402,6 +468,17 @@ static void handle(const Message& msg) {
         ack["ble_security"]="sc_mitm_bonded";
         ack["pairing_open"]=pairing.active(millis());
         ack["bond_count"]=NimBLEDevice::getNumBonds();
+        uint16_t hidPeer=keyboardPeer.load();
+        if (hidPeer!=NONE) {
+            auto info=NimBLEDevice::getServer()->getPeerInfoByHandle(hidPeer);
+            ack["ble_interval_us"]=info.getConnInterval()*1250;
+            ack["ble_latency"]=info.getConnLatency();
+        }
+    }
+    if (!error) {
+        const char* op=d["op"] | "";
+        if (!strcmp(op,"ota_status")) ota.status(ack);
+        ota.reply(ack,op);
     }
     if (!error && !strcmp(d["op"] | "","pair")) {
         char code[7]; snprintf(code,sizeof(code),"%06lu",static_cast<unsigned long>(pairingCode.load()));
@@ -417,6 +494,7 @@ static void handle(const Message& msg) {
 }
 
 void setup() {
+    Serial.setRxBufferSize(2048); // A complete 511-byte OTA JSON frame must fit without loss.
     Serial.begin(115200);
     if (!preferences.begin("esp-input",false)) abort();
     controlToken=preferences.getString("token","");
@@ -431,6 +509,7 @@ void setup() {
     queue=xQueueCreate(8,sizeof(Message));
     if (!queue) abort();
     NimBLEDevice::init("ESP Input Bridge");
+    NimBLEDevice::setMTU(247);
     NimBLEDevice::setSecurityAuth(true,true,true); // Bonding + MITM + LE Secure Connections only.
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY); // USB setup shows the one-time code.
     auto* server=NimBLEDevice::createServer();
@@ -449,9 +528,11 @@ void setup() {
     hid->setBatteryLevel(100);
     hid->startServices();
     auto* service=server->createService(SERVICE);
-    auto* cmd=service->createCharacteristic(COMMAND,NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_AUTHEN,20);
+    auto* cmd=service->createCharacteristic(COMMAND,NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_AUTHEN,MAX_LINE+1);
     cmd->setCallbacks(&commandCallbacks);
     replyReport=service->createCharacteristic(REPLY,NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_AUTHEN);
+    auto* data=service->createCharacteristic(OTA_DATA,NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_AUTHEN,512);
+    data->setCallbacks(&otaDataCallbacks);
     service->start();
     auto* ad=NimBLEDevice::getAdvertising();
     ad->setAppearance(GENERIC_HID);
@@ -462,10 +543,12 @@ void setup() {
     ad->setScanResponseData(scan);
     ad->enableScanResponse(true);
     ad->start();
+    ota.setup();
     Serial.printf("ESP Input Bridge %s ready (token required)\n",CHIP_NAME);
 }
 
 void loop() {
+    ota.tick(ota.owner()==NONE || generationOf(ota.owner())==ota.ownerGeneration());
     if (pairing.pending()!=NONE && !pairing.active(millis())) {
         NimBLEDevice::getServer()->disconnect(pairing.pending());
         pairing.close();
@@ -484,7 +567,7 @@ void loop() {
         owner=NONE;
     }
     // Bound serial ingestion so malformed streams cannot starve the lease watchdog.
-    for (int i=0;i<128 && Serial.available();i++) serialParser.feed(Serial.read(),NONE);
+    for (int i=0;i<512 && Serial.available();i++) serialParser.feed(Serial.read(),NONE);
     Message msg{};
     if (xQueueReceive(queue,&msg,0)==pdTRUE) handle(msg);
     delay(1);

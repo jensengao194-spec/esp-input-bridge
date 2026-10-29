@@ -6,15 +6,16 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = "0.3.1"
 
 
 def main():
     if (ROOT/"firmware/include/secrets.h").exists():
         raise SystemExit("Do not package a public firmware build with a private secrets.h")
-    dest = ROOT/"dist/firmware"
+    dest = ROOT/f"dist/firmware-{VERSION}"
     dest.mkdir(parents=True, exist_ok=True)
     core = ROOT/".platformio/packages/framework-arduinoespressif32"
-    manifest = {"version": "0.2.0", "hardware_tested": False, "chips": {}}
+    manifest = {"version": VERSION, "hardware_tested": False, "chips": {}}
     for chip, env in [("esp32c3", "esp32c3_usb"), ("esp32s3", "esp32s3_usb")]:
         build = ROOT/f"firmware/.pio/build/{env}"
         table = (build/"partitions.bin").read_bytes()
@@ -36,20 +37,24 @@ def main():
                            "sha256": hashlib.sha256(data).hexdigest()})
         shutil.copy2(ROOT/"LICENSE", folder/"LICENSE")
         shutil.copy2(ROOT/"THIRD_PARTY.md", folder/"THIRD_PARTY.md")
+        shutil.copy2(ROOT/"docs/OTA.md", folder/"OTA.md")
+        shutil.copy2(ROOT/"docs/VALIDATION.md", folder/"VALIDATION.md")
+        shutil.copy2(ROOT/"docs/LATENCY.md", folder/"LATENCY.md")
         manifest["chips"][chip] = {"environment": env, "hid_outputs": ["ble"] if chip == "esp32c3" else ["ble", "usb"],
                                    "ble_security": "sc_mitm_bonded",
                                    "images": images}
     (dest/"manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
     for chip in manifest["chips"]:
-        archive_path = ROOT/f"dist/esp-input-bridge-{chip}-0.2.0.zip"
+        archive_path = ROOT/f"dist/esp-input-bridge-{chip}-{VERSION}.zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted((dest/chip).iterdir()):
                 archive.write(path, path.relative_to(dest))
             archive.writestr("manifest.json", json.dumps({**manifest, "chips": {chip: manifest["chips"][chip]}}, indent=2)+"\n")
-            archive.writestr("FLASHING.md", f"""# {chip} firmware 0.2.0 (hardware untested)
+            archive.writestr("FLASHING.md", f"""# {chip} firmware {VERSION}
 
 This archive is for {chip} only, with the standard development-board profile.
 Check your board and USB connector. Back up existing data before flashing.
+This generic package does not assert physical validation of every board profile.
 No device is flashed automatically. With esptool installed, an example manual command is:
 
 ```
@@ -62,6 +67,7 @@ https://github.com/jensengao194-spec/esp-input-bridge
 
 The manifest includes offsets, chip, sizes and SHA256. These hashes detect file
 corruption; they do not imply Secure Boot or hardware Flash encryption.
+For A/B BLE OTA and the separately recorded C3 hardware results, see docs/OTA.md.
 """)
         print(archive_path)
 

@@ -3,6 +3,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -25,17 +26,25 @@ def validate():
 
 
 def main():
+    version = tomllib.loads((ROOT/"pyproject.toml").read_text())["project"]["version"]
+    manifest = json.loads((PLUGIN/"plugin.json").read_text())
+    if manifest["version"] != version:
+        raise SystemExit("Plugin and server package versions must match")
+    validate()
     subprocess.run([sys.executable, "-m", "build", "--wheel", "--outdir", str(ROOT/"dist")], cwd=ROOT, check=True)
-    wheel = ROOT/"dist/espcomputeruse-0.2.0-py3-none-any.whl"
+    wheel = ROOT/f"dist/espcomputeruse-{version}-py3-none-any.whl"
     shutil.copy2(wheel, PLUGIN/"server"/wheel.name)
     shutil.copy2(ROOT/"bridge.example.toml", PLUGIN/"bridge.example.toml")
     shutil.copy2(ROOT/"LICENSE", PLUGIN/"LICENSE")
     shutil.copy2(ROOT/"THIRD_PARTY.md", PLUGIN/"THIRD_PARTY.md")
     validate()
-    dest = ROOT/"dist/esp-input-bridge-plugin-0.2.0.zip"
+    dest = ROOT/f"dist/esp-input-bridge-plugin-{version}.zip"
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as archive:
         for file in sorted(PLUGIN.rglob("*")):
             if file.is_file() and "__pycache__" not in file.parts and file.suffix != ".pyc":
+                # Historical wheels remain on disk, but each package has one runtime.
+                if file.suffix == ".whl" and file.name != wheel.name:
+                    continue
                 archive.write(file, file.relative_to(PLUGIN))
     print(dest)
 

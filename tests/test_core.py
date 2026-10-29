@@ -170,6 +170,24 @@ async def test_stop_file(tmp_path):
     assert [c["op"] for c in target.commands] == ["disarm"]
 
 
+async def test_stop_file_interrupts_inflight_planning(tmp_path):
+    entered = asyncio.Event()
+
+    class SlowPlanner:
+        async def plan(self, *args):
+            entered.set()
+            await asyncio.Event().wait()
+
+    target = SimulatedTarget()
+    runner = Runner(target, SlowPlanner(), target, tmp_path/"planning-file-stop", execute=True)
+    task = asyncio.create_task(runner.run("wait"))
+    await entered.wait()
+    (runner.run_dir/"STOP").touch()
+    result = await asyncio.wait_for(task, 1)
+    assert result["status"] == "stopped"
+    assert [c["op"] for c in target.commands] == ["disarm"]
+
+
 async def test_delivery_timeout_does_not_retry_input(tmp_path):
     class TimeoutTarget(SimulatedTarget):
         async def request(self, command):

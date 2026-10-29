@@ -18,16 +18,17 @@ def main():
     spec = importlib.util.spec_from_file_location("bridge_launch", plugin/"server/launch.py")
     launch = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launch)
+    version = launch.plugin_version()
     root = (args.runtime or launch.runtime_root()).expanduser().resolve()
-    wheels = list((plugin/"server").glob("espcomputeruse-0.2.0-*.whl"))
+    wheels = list((plugin/"server").glob(f"espcomputeruse-{version}-*.whl"))
     if len(wheels) != 1:
         raise SystemExit("Bundled server wheel missing. Build the plugin package first.")
     venv.EnvBuilder(with_pip=True).create(root)
     python = root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check", str(wheels[0])], check=True)
     subprocess.run([str(python), "-m", "pip", "check"], check=True)
-    (root/".ready").write_text("0.2.0\n", encoding="utf-8")
-    print(f"Installed ESP Input Bridge 0.2.0 in {root}. Reconnect its MCP server.")
+    (root/".ready").write_text(version+"\n", encoding="utf-8")
+    print(f"Installed ESP Input Bridge {version} in {root}. Reconnect its MCP server.")
 
 
 if __name__ == "__main__":

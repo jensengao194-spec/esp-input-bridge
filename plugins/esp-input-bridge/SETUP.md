@@ -27,7 +27,8 @@ authenticated keys. To clear lost bonds, use authenticated USB `esp-use forget-b
 
 `esp-use` is inside the setup-created virtual environment, not added to your PATH.
 On macOS/Linux invoke `${ESP_INPUT_RUNTIME}/bin/esp-use`; the default runtime is
-`${XDG_CACHE_HOME:-$HOME/.cache}/esp-input-bridge/0.2.0`. On Windows use its
+`${XDG_CACHE_HOME:-$HOME/.cache}/esp-input-bridge/0.3.1`. Runtime versions follow
+`plugin.json`; an older runtime marker is rejected. On Windows use its
 `Scripts/esp-use.exe`. Keep the token in the process environment, not command arguments.
 
 macOS needs Screen Recording permission for the launching app/terminal and

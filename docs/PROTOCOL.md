@@ -1,14 +1,19 @@
 # ESP32-C3 / ESP32-S3 命令协议 v1
 
-USB 串口为 115200 8N1；原生 C3 USB 的 CDC 使用相同配置入口。每条命令是一行 UTF-8 JSON，以 LF 结束，正文最多 511 字节。BLE 使用同一个格式，按不超过 20 字节拆包；分片由换行结束，无需大 MTU。分片超时 2 秒或溢出后丢弃到下一个换行。
+USB 串口为 115200 8N1；原生 C3 USB 的 CDC 使用相同配置入口。每条命令是一行 UTF-8 JSON，以 LF 结束，正文最多 511 字节。BLE 控制通道使用同一个格式，分片不超过 `min(MTU-3,244)` 字节；默认小 MTU 仍可用 20 字节分片。分片超时 2 秒或溢出后丢弃到下一个换行。OTA 的独立二进制数据通道见 [OTA 文档](OTA.md)。
 
 | GATT | UUID |
 | --- | --- |
 | Service | `c3a00001-7e45-4f9b-9d83-9bb45a2c1000` |
-| Command (authenticated WRITE with response) | `c3a00002-7e45-4f9b-9d83-9bb45a2c1000` |
+| Command (authenticated WRITE / WRITE without response) | `c3a00002-7e45-4f9b-9d83-9bb45a2c1000` |
 | Reply (NOTIFY / authenticated READ) | `c3a00003-7e45-4f9b-9d83-9bb45a2c1000` |
+| OTA data (authenticated WRITE without response) | `c3a00004-7e45-4f9b-9d83-9bb45a2c1000` |
 
 设备广告公布 HID 服务 `0x1812` 和名称，控制服务在连接后的 GATT 服务发现中可见。BLE 断线后不自动重连重发。一次只允许一个在途请求，主机逐条等待 ACK。
+
+主机仅保留当前请求的 ACK 等待槽，丢弃旧 ID、重复及无关回复；断线回调立即结束等待。
+取消会先等待在途帧完成，重复取消也不提前释放传输锁；关闭操作等待该事务结束，
+关闭后的 transport 拒绝新请求。上层在停止或未知投递后只尝试 disarm，不重放输入。
 
 ```json
 {"v":1,"id":"b69b394ad4ef46d18786e201e225959ec","op":"move","dx":20,"dy":-5}
@@ -27,9 +32,9 @@ USB 串口为 115200 8N1；原生 C3 USB 的 CDC 使用相同配置入口。每�
 | disarm | 无 | 撤销租约并发送空键鼠报告 |
 | release | 无 | 发送空报告，不撤销租约 |
 | move | dx, dy 整数 -127..127 | 相对移动，隐含 buttons=0 |
-| click | button: 1 / 2 / 4 | 左 / 右 / 中键，35ms 后释放 |
+| click | button: 1 / 2 / 4 | 左 / 右 / 中键，有界按下/释放；BLE 按连接间隔节流 |
 | scroll | steps 整数 -20..20 | 垂直滚轮，正值向上 |
-| key | mod: 0..255, keys: 0..6 个 usage 4..101 | 35ms 后释放，随后间隔 20ms |
+| key | mod: 0..255, keys: 0..6 个 usage 4..101 | 有界按下/释放；BLE 最小脉冲 8ms，输入报告按连接间隔节流；USB 保留 35ms / 20ms |
 
 键盘 mod 是标准位掩码：左 CTRL=1、SHIFT=2、ALT=4、GUI=8，右侧修饰键依次为 16/32/64/128。高层主机默认使用左侧修饰键。键盘报告为 8 字节：modifier、reserved、6 usages。鼠标报告为 4 字节：buttons、signed X、signed Y、signed wheel。BLE 每种输入报告独立 characteristic，通过 Report Reference 指明 report ID；报告数据不再重复添加 ID。
 
@@ -44,5 +49,10 @@ ping / arm 还返回 `ble_security="sc_mitm_bonded"`、`pairing_open` 和 `bond_
 不经 ping 或 BLE 返回；配对窗口默认关闭，不能通过 BLE 打开或清除绑定。
 
 固件内存保存最近 32 个 ID 与原始帧 fingerprint/ACK。同 ID 同帧返回已缓存 ACK，同 ID 不同帧拒绝 `id_conflict`。此机制只适用于当前启动、最近 32 条请求；不是跨重启的 exactly-once 保证。主机不会自动重试有副作用的操作，ACK 超时视为未知状态。
+
+0.3.1 对支持的控制特征使用免 ATT 响应写入，每条命令仍须匹配自己的协议 ACK；
+旧固件保留 WRITE with response 兼容路径。连接认证成功及 arm 时请求 15ms / latency 0；
+`ping` 返回实际 `ble_interval_us`、`ble_latency`。输入通知按协商间隔限速，防止有线控制
+速度超过 BLE TX 缓冲容量。延迟测量见 [LATENCY.md](LATENCY.md)。
 
 鼠标定位、图像缩放映射、文本拆成 usage、等待与批量动作属于主机层；固件不执行任意脚本、系统命令或字符串输入。

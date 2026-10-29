@@ -7,6 +7,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageStat
@@ -14,6 +15,7 @@ from PIL import Image, ImageChops, ImageStat
 
 @dataclass
 class Observation:
+    """A captured snapshot. Treat its image as read-only; capture again for changes."""
     image: Image.Image
     origin: tuple[int, int]
     logical_size: tuple[int, int]
@@ -23,19 +25,32 @@ class Observation:
     captured_at: float = field(default_factory=time.monotonic)
     changed: float = 1.0
 
-    def jpeg(self) -> bytes:
+    @cached_property
+    def _jpeg_bytes(self) -> bytes:
         b = io.BytesIO()
-        self.image.convert("RGB").save(b, "JPEG", quality=78)
+        image = self.image if self.image.mode == "RGB" else self.image.convert("RGB")
+        image.save(b, "JPEG", quality=78)
         return b.getvalue()
+
+    def jpeg(self) -> bytes:
+        return self._jpeg_bytes
+
+    @cached_property
+    def _sha256(self) -> str:
+        return hashlib.sha256(self.jpeg()).hexdigest()
+
+    @cached_property
+    def _base64(self) -> str:
+        return base64.b64encode(self.jpeg()).decode("ascii")
 
     def metadata(self) -> dict:
         return {"id": self.id, "width": self.image.width, "height": self.image.height,
                 "origin": self.origin, "logical_size": self.logical_size,
                 "cursor": self.cursor, "changed": round(self.changed, 5),
-                "context": self.context, "sha256": hashlib.sha256(self.jpeg()).hexdigest()}
+                "context": self.context, "sha256": self._sha256}
 
     def payload(self) -> dict:
-        return {**self.metadata(), "image_base64": base64.b64encode(self.jpeg()).decode(),
+        return {**self.metadata(), "image_base64": self._base64,
                 "mime_type": "image/jpeg"}
 
     def target(self, x: int, y: int) -> tuple[float, float]:

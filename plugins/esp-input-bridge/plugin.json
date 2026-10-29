@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "esp-input-bridge",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Use ESP32 hardware mouse and keyboard input from an existing agent, with no second model call.",
   "author": {"name": "jensengao194-spec", "url": "https://github.com/jensengao194-spec"},
   "homepage": "https://github.com/jensengao194-spec/esp-input-bridge",
@@ -15,7 +15,7 @@
       "interface": {
         "displayName": "ESP Input Bridge",
         "shortDescription": "ESP32 hardware mouse/keyboard",
-        "longDescription": "Replace software mouse and keyboard injection with ESP32-C3 BLE HID or ESP32-S3 BLE/USB HID. Your existing agent keeps its reasoning role. Three local MCP tools observe, execute a bounded batch, and stop. Demo mode works without a device. Real operation requires a provisioned board, local configuration, and screen capture permission. Physical-board validation is pending; hardware input does not guarantee avoiding automation detection.",
+        "longDescription": "Replace software mouse and keyboard injection with ESP32-C3 BLE HID or ESP32-S3 BLE/USB HID. Your existing agent keeps its reasoning role. Three local MCP tools observe, execute a bounded batch, and stop. Demo mode works without a device. Real operation requires a provisioned board, local configuration, and screen capture permission. C3 HID was physically tested on macOS; S3 has compilation evidence only. Hardware input does not guarantee avoiding automation detection.",
         "developerName": "jensengao194-spec",
         "category": "Developer Tools",
         "capabilities": ["Read target screen", "Execute hardware input", "Stop inputs"],

@@ -15,7 +15,7 @@ An MIT-licensed hardware input adapter: ESP32-C3 BLE HID, ESP32-S3 BLE/USB HID, 
 
 S3 必须连接开发板的**原生 USB OTG 口**。C3 原生 USB 仅作串口/JTAG，不能提供 USB HID：[乐鑫说明](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/api-guides/usb-serial-jtag-console.html)。
 
-**当前未进行物理开发板验证，也不保证绕过软件的自动化检测。** 编译、模拟、硬件与应用结果分别记录。
+**C3 的实板烧录和 OTA 验证记录见 [OTA 文档](docs/OTA.md)。** 编译、模拟、硬件与应用结果分别记录，不保证绕过软件的自动化检测。
 
 ## 安装主机端
 
@@ -121,11 +121,21 @@ PLATFORMIO_CORE_DIR="$PWD/.platformio" .pio-venv/bin/pio run -d firmware -e esp3
 .venv/bin/python scripts/build_plugin.py
 ```
 
-固定 pioarduino `55.03.37`、Arduino-ESP32 `3.3.7`、NimBLE `2.3.6`、ArduinoJson `7.4.2`。默认 C3 DevKitM-1 与 S3 DevKitC-1 板型；其他板型需核对 Flash 和 USB 接法。可选 `esp32c3_uart` / `esp32s3_uart` 环境供 USB-UART 控制口使用。
+固定 pioarduino `55.03.37`、Arduino-ESP32 `3.3.7`、NimBLE `2.3.9`、ArduinoJson `7.4.2`。NimBLE 升级修复 C3 在 Arduino 3.3.7 下初始化崩溃的问题。默认 C3 DevKitM-1 与 S3 DevKitC-1 板型；其他板型需核对 Flash 和 USB 接法。可选 `esp32c3_uart` / `esp32s3_uart` 环境供 USB-UART 控制口使用。
 
-`dist/` 含 C3、S3 两个固件 ZIP、镜像偏移与 SHA-256 manifest，以及 `esp-input-bridge-plugin-0.2.0.zip`。`firmware.bin` 是应用镜像，不能单独当作地址 0 的完整 Flash 镜像；首次烧录需按 manifest 使用 bootloader、分区表、boot_app0 与应用镜像。镜像分段烧录不覆盖 NVS，禁止跨芯片烧录。
+C3 使用 4MiB A/B 分区，蓝牙升级自动使用二进制窗口传输，并在重启后确认新镜像。使用方式及回滚行为见 [OTA 文档](docs/OTA.md)，控制链路延迟实测见 [LATENCY](docs/LATENCY.md)。历史发布包保留其原版本构建内容。
+
+固件打包脚本生成 `dist/esp-input-bridge-{esp32c3,esp32s3}-0.3.1.zip` 和 `dist/firmware-0.3.1/manifest.json`，保留历史版本路径。插件包为 `dist/esp-input-bridge-plugin-0.3.1.zip`，版本取自主机项目和插件 manifest，并核对两者一致；包内仅包含当前版本 wheel，历史 wheel 保留在原处。`firmware.bin` 是应用镜像，不能单独当作地址 0 的完整 Flash 镜像；首次烧录需按 manifest 使用 bootloader、分区表、boot_app0 与应用镜像。镜像分段烧录不覆盖 NVS，禁止跨芯片烧录。
 
 插件 ZIP 带服务器 wheel。首次 setup 从用户配置的 Python 包索引安装声明的依赖，不修改系统 Python。官方目录的资格与审核独立于本地打包成功。
+
+主机端 0.3.1 复用同一观察的 JPEG、哈希和 Base64，规划结果完成即继续执行；蓝牙只保留当前请求的 ACK，断线及时停止等待。可用以下命令复测主机开销，运行时不连接板子或发送输入：
+
+```bash
+.venv/bin/python scripts/benchmark_host.py --iterations 30
+```
+
+基准范围与前后结果见 [主机优化记录](docs/HOST_OPTIMIZATIONS.md)。使用新版插件包后需运行该包的 setup 并重新连接 MCP；已安装的 0.2.0 缓存不会随源码修改而自动更新。
 
 停止按钮、Ctrl+C、MCP stop、或日志目录里的 STOP 文件会停止输入并尝试释放。设备使用有界按键/点击脉冲、30 秒租约，未知投递不自动重发。链路失效时无法保证释放报告送达；ACK 不代表软件完成操作，仍应观察结果。
 

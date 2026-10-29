@@ -13,7 +13,7 @@ from espcomputeruse.agents import HTTPPlanner
 from espcomputeruse.server import create_app
 from espcomputeruse.simulator import SimulatedTarget
 from espcomputeruse.transports import BLETransport, SerialTransport, finish_transaction
-from espcomputeruse.protocol import UncertainDelivery
+from espcomputeruse.protocol import TransportError, UncertainDelivery
 
 
 @pytest.mark.parametrize("kind", ["http", "chat", "responses"])
@@ -134,6 +134,9 @@ async def test_real_serial_transport_over_pseudoterminal():
         assert (await transport.request({"op": "key", "mod": 0, "keys": [4]}))["ok"]
         worker.join(timeout=1)
         assert captured[0]["keys"] == [4]
+        await transport.close()
+        with pytest.raises(TransportError, match="closed"):
+            await transport.request({"op": "ping"})
     finally:
         await transport.close()
         os.close(master)
